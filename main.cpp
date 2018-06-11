@@ -31,7 +31,7 @@ struct block_found
 	bool honest;
 };
 
-constexpr size_t   TIME_DILATION_MULT = 100;
+constexpr size_t   TIME_DILATION_MULT = 200;
 constexpr uint64_t ATTACK_START_BLOCK = 0;
 
 thdq<block_found> blk_q;
@@ -102,7 +102,7 @@ void attack_miner()
 		{
 			block_found blk;
 			blk.diff = diff;
-			blk.timestamp = base_walltime;
+			blk.timestamp = dilated_time() - 10*60;
 			blk.honest = false;
 			blk_q.push(blk);
 			break;
@@ -112,123 +112,71 @@ void attack_miner()
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
 
-#define DIFFICULTY_TARGET                               240  // seconds
-#define DIFFICULTY_WINDOW                               720  // blocks
-#define DIFFICULTY_LAG                                  15   // !!!
-#define DIFFICULTY_CUT                                  60   // timestamps to cut after sorting
-#define DIFFICULTY_BLOCKS_COUNT                         DIFFICULTY_WINDOW + DIFFICULTY_LAG
 
-#define DIFFICULTY_WINDOW_V2							              17
-#define DIFFICULTY_CUT_V2                               6
-#define DIFFICULTY_BLOCKS_COUNT_V2                      DIFFICULTY_WINDOW_V2 + DIFFICULTY_CUT_V2*2
-#define MAX_AVERAGE_TIMESPAN          (uint64_t) DIFFICULTY_TARGET*6   // 24 minutes
-#define MIN_AVERAGE_TIMESPAN          (uint64_t) DIFFICULTY_TARGET/24  // 10s
-
-
-namespace epee
-{
-namespace misc_utils
-{
-  template<class type_vec_type>
-  type_vec_type median(std::vector<type_vec_type> &v)
-  {
-    if(v.empty())
-      return 0;
-    if(v.size() == 1)
-      return v[0];
-
-    size_t n = (v.size()) / 2;
-    std::sort(v.begin(), v.end());
-    //nth_element(v.begin(), v.begin()+n-1, v.end());
-    if(v.size()%2)
-    {//1, 3, 5...
-      return v[n];
-    }else 
-    {//2, 4, 6...
-      return (v[n-1] + v[n])/2;
-    }
-  }
-}
-}
-
-static inline void mul(uint64_t a, uint64_t b, uint64_t &low, uint64_t &high) {
-	unsigned __int128 r = (unsigned __int128)a * (unsigned __int128)b;
-	high = r >> 64;
-	low = (uint64_t)r;
-}
-
+// LWMA-2 difficulty algorithm (commented version)
+// Copyright (c) 2017-2018 Zawy
+// https://github.com/zawy12/difficulty-algorithms/issues/3
+// Bitcoin clones must lower their FTL. 
+// Cryptonote et al coins must make the following changes:
+#define DIFFICULTY_TARGET 240
+#define BLOCKCHAIN_TIMESTAMP_CHECK_WINDOW    11
+#define CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT        3 * DIFFICULTY_TARGET 
+#define DIFFICULTY_WINDOW                      (60 + 1)
 typedef uint64_t difficulty_type;
 
-difficulty_type difficulty_sumo (std::vector<std::uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds) {
-    if (timestamps.size() > DIFFICULTY_BLOCKS_COUNT_V2)
-    {
-      timestamps.resize(DIFFICULTY_BLOCKS_COUNT_V2);
-      cumulative_difficulties.resize(DIFFICULTY_BLOCKS_COUNT_V2);
-    }
+// Do not sort timestamps.  CN coins must deploy the Jagerman MTP Patch. See:
+// https://github.com/loki-project/loki/pull/26   or
+// https://github.com/wownero/wownero/commit/1f6760533fcec0d84a6bd68369e0ea26716b01e7
 
-    size_t length = timestamps.size();
-    if (length <= 1) {
-      return 1;
-    }
+// New coins:  "return 100;" can change the 100 based on expected hashrate.
+// D should not be < 50 for the life of the coin because this uses integer math,
 
-    std::sort(timestamps.begin(), timestamps.end());
-    size_t cut_begin, cut_end;
-    static_assert(2 * DIFFICULTY_CUT_V2 <= DIFFICULTY_BLOCKS_COUNT_V2 - 2, "Cut length is too large");
-    if (length <= DIFFICULTY_BLOCKS_COUNT_V2 - 2 * DIFFICULTY_CUT_V2) {
-      cut_begin = 0;
-      cut_end = length;
-    }
-    else {
-      cut_begin = (length - (DIFFICULTY_BLOCKS_COUNT_V2 - 2 * DIFFICULTY_CUT_V2) + 1) / 2;
-      cut_end = cut_begin + (DIFFICULTY_BLOCKS_COUNT_V2 - 2 * DIFFICULTY_CUT_V2);
-    }
-    
-    uint64_t total_timespan = timestamps[cut_end - 1] - timestamps[cut_begin];
-    if (total_timespan == 0) {
-      total_timespan = 1;
-    }
+difficulty_type next_difficulty(std::vector<std::uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties)
+{
+	int64_t T    = DIFFICULTY_TARGET; // target solvetime seconds
+	int64_t N   = DIFFICULTY_WINDOW - 1; //  N=45, 60, and 90 for T=600, 120, 60.
+	int64_t FTL = CRYPTONOTE_BLOCK_FUTURE_TIME_LIMIT; // < 3xT
+	int64_t L(0), ST, sum_3_ST(0), next_D, prev_D, SMA;
 
-    uint64_t timespan_median = 0;
-    if (cut_begin > 0 && length >= cut_begin * 2 + 3){
-      std::vector<std::uint64_t> time_spans;
-      for (size_t i = length - cut_begin * 2 - 3; i < length - 1; i++){
-        uint64_t time_span = timestamps[i + 1] - timestamps[i];
-        if (time_span == 0) {
-          time_span = 1;
-        }
-        time_spans.push_back(time_span);
+	// If expecting a 10x decrease or 1000x increase in D after a fork, seriously consider: 
+	// if ( height >= fork_height && height <= fork_height+N )  { return difficulty_guess; }
 
-        std::cout << "Timespan " << i << ": " << (time_span / 60) / 60 << ":" << (time_span > 3600 ? (time_span % 3600) / 60 : time_span / 60) << ":" << time_span % 60 << " (" << time_span << ")\n";
-      }
-      timespan_median = epee::misc_utils::median(time_spans);
-    }
+	// TS and CD vectors must be size N+1 after startup, and element N is most recent block.
 
-    uint64_t timespan_length = length - cut_begin * 2 - 1;
-    std::cout << "Timespan Median: " << timespan_median << ", Timespan Average: " << total_timespan / timespan_length << "\n";
+	// If coin is starting, this will be activated.
+	uint64_t initial_difficulty_guess = 240000; // Dev needs to select this. Guess low.
+	if (timestamps.size() <= static_cast<uint64_t>(N) )  {  
+		return initial_difficulty_guess;  
+	}
 
-    uint64_t total_timespan_median = timespan_median > 0 ? timespan_median * timespan_length : total_timespan * 7 / 10;
-    uint64_t adjusted_total_timespan = (total_timespan * 8 + total_timespan_median * 3) / 10; //  0.8A + 0.3M (the median of a poisson distribution is 70% of the mean, so 0.25A = 0.25/0.7 = 0.285M)
-    if (adjusted_total_timespan > MAX_AVERAGE_TIMESPAN * timespan_length){
-      adjusted_total_timespan = MAX_AVERAGE_TIMESPAN * timespan_length;
-    }
-    if (adjusted_total_timespan < MIN_AVERAGE_TIMESPAN * timespan_length){
-      adjusted_total_timespan = MIN_AVERAGE_TIMESPAN * timespan_length;
-    }
-    
-    difficulty_type total_work = cumulative_difficulties[cut_end - 1] - cumulative_difficulties[cut_begin];
+	// N is most recently solved block. i must be signed
+	for ( int64_t i = 1; i <= N; i++) {  
+		// +/- FTL limits are bad timestamp protection.  6xT limits drop in D to reduce oscillations.
+		ST = std::max(-FTL, std::min( (int64_t)(timestamps[i]) - (int64_t)(timestamps[i-1]), 6*T));
+		L +=  ST * i ; // Give more weight to most recent blocks.
+		// Do these inside loop to capture -FTL and +6*T limitations.
+		if ( i > N-3 ) { sum_3_ST += ST; }      
+	}
+	// Calculate next_D = avgD * T / LWMA(STs) using integer math
+	std::cout << "diff sum: " << (cumulative_difficulties[N] - cumulative_difficulties[0]) << " L " << L << " sizes " << timestamps.size() << " " << cumulative_difficulties.size() << "\n";
+	next_D = ((cumulative_difficulties[N] - cumulative_difficulties[0])*T*(N+1)*99)/(100*2*L);
 
-    uint64_t low, high;
-    mul(total_work, target_seconds, low, high);
-    if (high != 0) {
-      return 0;
-    }
+	std::cout << "next_D " << next_D << "\n";
 
-    uint64_t next_diff = (low + adjusted_total_timespan - 1) / adjusted_total_timespan;
-    if (next_diff < 1) next_diff = 1;
-    std::cout << "Total timespan: " << total_timespan << ", Adjusted total timespan: " << adjusted_total_timespan << ", Total work: " << total_work << ", Next diff: " << next_diff << ", Hashrate (H/s): " << next_diff / target_seconds << "\n";
+	// begin LWMA-2 changes from LWMA
+	prev_D = cumulative_difficulties[N] - cumulative_difficulties[N-1];
+	SMA = ( cumulative_difficulties[N] - cumulative_difficulties[N-N/2] ) *4 *T / 
+		( 3*(N-N/2)*T + (int64_t)(timestamps[N]) - (int64_t)(timestamps[N-N/2]) ); 
 
-    return next_diff;
-  }
+	std::cout << "SMA " << SMA << "\n";
+	if ( sum_3_ST < (8*T)/10 && (prev_D*109)/100 < (12*SMA)/10) {  
+		next_D = (prev_D*109)/100; 
+	}
+	std::cout << "next_D " << next_D << "\n";
+	// end LWMA-2 section
+	return static_cast<uint64_t>(next_D);
+	// next_Target = sumTargets*L*2/0.998/T/(N+1)/N/N; // To show the difference.
+}
 
 //Const diff assuming a single miner
 difficulty_type difficulty_const(std::vector<std::uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties, size_t target_seconds) 
@@ -241,7 +189,7 @@ int main(int argc, char **argv)
 	base_walltime = get_walltime();
 	base_timestamp = std::chrono::steady_clock::now();
 
-	block_diff = 1;
+	block_diff = 240000;
 
 	std::thread thd_1(honest_miner);
 	std::thread athd_1;
@@ -261,6 +209,11 @@ int main(int argc, char **argv)
 		block++;
 		timestamps.emplace_back(blk.timestamp);
 		cum_diffs.emplace_back(diff_sum);
+		
+		if(timestamps.size() > DIFFICULTY_WINDOW)
+			timestamps.erase(timestamps.begin());
+		if(cum_diffs.size() > DIFFICULTY_WINDOW)
+			cum_diffs.erase(cum_diffs.begin());
 
 		int64_t time_dil = dilated_time();
 		strftime(diltime, sizeof(diltime), "%X", gmtime(&time_dil));
@@ -272,7 +225,7 @@ int main(int argc, char **argv)
 			std::setw(8) << std::setfill(' ') << blk.diff << " timestamp: " << blk.timestamp << "\n\n";
 
 		//block_diff = next_difficulty_v2(timestamps, cum_diffs, DIFFICULTY_TARGET);
-		block_diff = difficulty_const(timestamps, cum_diffs, DIFFICULTY_TARGET);
+		block_diff = next_difficulty(timestamps, cum_diffs);
 		std::cout << "\n" << tbuf << "next diff is " << block_diff << "\n" << "We found " << block << " blocks with average window of " << elapsed_time() / block << "s\n";
 
 		if(block == ATTACK_START_BLOCK)
