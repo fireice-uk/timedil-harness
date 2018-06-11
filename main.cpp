@@ -31,8 +31,8 @@ struct block_found
 	bool honest;
 };
 
-constexpr size_t   TIME_DILATION_MULT = 200;
-constexpr uint64_t ATTACK_START_BLOCK = 0;
+constexpr size_t   TIME_DILATION_MULT = 1000;
+constexpr uint64_t ATTACK_START_BLOCK = 150;
 
 thdq<block_found> blk_q;
 std::atomic<uint64_t> block_diff;
@@ -94,18 +94,22 @@ void attack_miner()
 {
 	std::random_device rd;
 	std::mt19937_64 gen(rd());
+	//uint64_t stamp = dilated_time();
 
-	for(size_t i=0; i < TIME_DILATION_MULT; i++)
+	while(true)
 	{
-		uint64_t diff = 0xFFFFFFFFFFFFFFFFULL / hash(gen);
-		if(diff > block_diff)
+		for(size_t i=0; i < TIME_DILATION_MULT; i++)
 		{
-			block_found blk;
-			blk.diff = diff;
-			blk.timestamp = dilated_time() - 10*60;
-			blk.honest = false;
-			blk_q.push(blk);
-			break;
+			uint64_t diff = 0xFFFFFFFFFFFFFFFFULL / hash(gen);
+			if(diff > block_diff)
+			{
+				block_found blk;
+				blk.diff = diff;
+				blk.timestamp = dilated_time() + 3600*2;
+				blk.honest = false;
+				blk_q.push(blk);
+				break;
+			}
 		}
 	}
 
@@ -192,7 +196,7 @@ int main(int argc, char **argv)
 	block_diff = 240000;
 
 	std::thread thd_1(honest_miner);
-	std::thread athd_1;
+	std::thread athd_1, athd_2;
 
 	std::vector<uint64_t> timestamps;
 	std::vector<uint64_t> cum_diffs;
@@ -205,7 +209,7 @@ int main(int argc, char **argv)
 		char diltime[64];
 		char tbuf[128];
 		block_found blk = blk_q.pop();
-		diff_sum += blk.diff;
+		diff_sum += block_diff;//blk.diff;
 		block++;
 		timestamps.emplace_back(blk.timestamp);
 		cum_diffs.emplace_back(diff_sum);
@@ -232,6 +236,7 @@ int main(int argc, char **argv)
 		{
 			std::cout << "!!! Attack miner starting!" << "\n";
 			athd_1 = std::thread(attack_miner);
+			athd_2 = std::thread(attack_miner);
 		}
 	}
 }
