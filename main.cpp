@@ -236,9 +236,169 @@ difficulty_type difficulty_const(std::vector<std::uint64_t> timestamps, std::vec
 	return target_seconds * 1000;
 }
 
+
+// LWMA-3 difficulty algorithm 
+// Copyright (c) 2017-2018 Zawy, MIT License
+// https://github.com/zawy12/difficulty-algorithms/issues/3
+// See commented version for required config file changes. Fix your FTL and MTP.
+
+// difficulty_type should be uint64_t
+difficulty_type next_difficulty_v3_1(std::vector<uint64_t> timestamps, 
+    std::vector<difficulty_type> cumulative_difficulties) {
+    
+    uint64_t  T = 120;
+    uint64_t  N = 60; // N=45, 60, and 90 for T=600, 120, 60.
+    uint64_t  L(0), sum_3_ST(0), next_D, prev_D;
+    int64_t ST, previous_timestamp;
+
+    // If it's a new coin, do startup code. 
+    // Increase difficulty_guess if it needs to be much higher, but guess lower than lowest guess.
+    uint64_t difficulty_guess = 100; 
+    if (timestamps.size() <= 10 ) {   return difficulty_guess;   }
+    if ( timestamps.size() < N +1 ) { N = timestamps.size()-1;  }
+
+    // If hashrate/difficulty ratio after a fork is < 1/3 prior ratio, hardcode D for N+1 blocks after fork. 
+    // difficulty_guess = 100; //  Dev may change.  Guess low.
+    // if (height <= UPGRADE_HEIGHT + N+1 ) { return difficulty_guess;  }
+
+    previous_timestamp = static_cast<int64_t>(timestamps[0]);
+    for ( uint64_t i = 1; i <= N; i++) {
+	   ST = static_cast<int64_t>(timestamps[i]) - previous_timestamp;
+       ST = std::max(1l, std::min(ST, static_cast<int64_t>(6*T)));
+	   previous_timestamp += ST;
+
+       L +=  ST * i ; 
+	   //std::cout << "ST : " << ST << std::endl;
+       // delete the following line if you do not want the "jump rule"
+       if ( i > N-3 ) { sum_3_ST += ST; } 
+    }
+
+    std::cout << "avg L " <<  L/((N*N*1+N*1)/2) << std::endl;
+    next_D = ((cumulative_difficulties[N] - cumulative_difficulties[0])*T*(N+1)*99)/(100*2*L);
+    prev_D = cumulative_difficulties[N] - cumulative_difficulties[N-1]; 
+    next_D = std::max((prev_D*67)/100, std::min(next_D, (prev_D*150)/100)); 
+
+    // delete the following line if you do not want the "jump rule"
+    if ( sum_3_ST < (8*T)/10) {  next_D = std::max(next_D,(prev_D*108)/100); } 
+
+    return next_D;
+}
+
+template <typename T>
+inline T clamp(T lo, T v, T hi)
+{
+	return v < lo ? lo : v > hi ? hi : v;
+}
+
+constexpr uint64_t T = 240;
+constexpr uint64_t N = 45;
+
+difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties) 
+{
+	if(timestamps.size() != N + 1 || cumulative_difficulties.size() != N + 1)
+		abort();
+
+	uint64_t L = 0;
+	uint64_t prev_t = timestamps[0];
+	for(uint64_t i = 1; i <= N; i++)
+	{
+		uint64_t this_t = std::max(timestamps[i], prev_t);
+		L += std::min(this_t - prev_t, 6*T) * i * i;
+		prev_t = this_t;
+	}
+
+	// Let's take CD as a sum of N difficulties. Sum of weights is (n*(n+1)*(2n+1))/6 (SUM)
+	// L is a sigma(timeperiods * weights)
+	// D = CD*T*SUM / NL
+	// D = CD*T*N*(N+1)*(2N+1) / 6NL
+	// D = CD*T*(N+1)*(2N+1) / 6L
+	// TSUM = T*(N+1)*(2N+1) / 6 (const)
+	// D = CD*TSUM / L
+
+	// By a happy accident most time units are a multiple of 6 so we can prepare a TSUM without loosing accuracy
+	constexpr uint64_t TSUM = (T * (N+1) * (2*N+1)) / 6;
+	uint64_t next_D = ((cumulative_difficulties[N] - cumulative_difficulties[0]) * TSUM) / L;
+
+	// 99/100 adds a small bias towards decreasing diff, unlike zawy we do it in a separate step to avoid an overflow at 6GH/s
+	next_D = (next_D * 99ull) / 100ull;
+
+	// Sanity limits
+	uint64_t prev_D = cumulative_difficulties[N] - cumulative_difficulties[N-1]; 
+    next_D = std::max((prev_D*67)/100, std::min(next_D, (prev_D*150)/100));
+
+	return next_D;
+}
+
+difficulty_type next_difficulty_v3_old(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties) 
+{
+	if(timestamps.size() != N + 1 || cumulative_difficulties.size() != N + 1)
+		abort();
+
+	uint64_t L = 0;
+	uint64_t prev_t = timestamps[0];
+	for(uint64_t i = 1; i <= N; i++)
+	{
+		uint64_t this_t = std::max(timestamps[i], prev_t);
+		L += std::min(this_t - prev_t, 5 * T) * i;
+		prev_t = this_t;
+	}
+
+	//constexpr uint64_t clamp_increase = (T * N * (N + 1) * 99) / int64_t(100.0 * 2.0 * 2.5);
+	//constexpr uint64_t clamp_decrease = (T * N * (N + 1) * 99) / int64_t(100.0 * 2.0 * 0.2);
+	//L = clamp(clamp_increase, L, clamp_decrease); // This guarantees positive L
+
+	// Commetary by fireice
+	// Let's take CD as a sum of N difficulties. Sum of weights is (n*(n+1)*(2n+1))/6
+	// L is a sigma(timeperiods * weights)
+	// Therefore D = CD*0.5*(2N^2+2N)*T / NL
+	// Therefore D = 0.5*CD*(2N+2)*T / L
+	// Therefore D = CD*(2N+2)*T / 2L
+	uint64_t next_D = ((cumulative_difficulties[N] - cumulative_difficulties[0]) * T * (N+1)) / (2 * L);
+
+	// 99/100 adds a small bias towards decreasing diff, unlike zawy we do it in a separate step to avoid an overflow at 6GH/s
+	next_D = (next_D * 99ull) / 100ull;
+	return next_D;
+}
+
 int main(int argc, char **argv) 
 {
-	base_walltime = get_walltime();
+	uint64_t timestamp = 1500000000;
+	std::vector<uint64_t> timestamps;
+	std::vector<uint64_t> cum_diffs;
+
+	uint64_t diff = 0;
+	for(size_t i=0; i <= N; i++)
+	{
+		diff += 1000000 * T;
+		timestamp += T;
+		timestamps.emplace_back(timestamp);
+
+		cum_diffs.emplace_back(diff);
+	}
+
+	for(size_t i=1; i < 100; i++)
+	{
+		uint64_t d = next_difficulty_v3(timestamps, cum_diffs);
+		diff += d;
+
+		uint64_t hr;
+		if(i >= 10 && i < 25)
+			hr = 2000000;
+		else
+			hr = 1000000;
+		uint64_t solve_time =  d / hr;
+		std::cout << i << " timestamp : " << timestamps.back() << " diff " << d << " solve_time " << solve_time << std::endl;
+
+		timestamp += solve_time;
+
+		cum_diffs.emplace_back(diff);
+		timestamps.emplace_back(timestamp);
+
+		cum_diffs.erase(cum_diffs.begin());
+		timestamps.erase(timestamps.begin());
+	}
+		
+	/*base_walltime = get_walltime();
 	base_timestamp = std::chrono::steady_clock::now();
 
 	block_diff = 1;
@@ -280,5 +440,6 @@ int main(int argc, char **argv)
 			std::cout << "!!! Attack miner starting!" << "\n";
 			athd_1 = std::thread(attack_miner);
 		}
-	}
+	}*/
+	
 }
