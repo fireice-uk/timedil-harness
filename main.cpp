@@ -382,9 +382,9 @@ int main(int argc, char **argv)
 		diff += d;
 
 		uint64_t hr;
-		if(i >= 10 && i < 25)
-			hr = 2000000;
-		else
+		//if(i >= 10 && i < 25)
+		//	hr = 2000000;
+		//else
 			hr = 1000000;
 		uint64_t solve_time =  d / hr;
 		std::cout << i << " timestamp : " << timestamps.back() << " diff " << d << " solve_time " << solve_time << std::endl;
@@ -392,7 +392,10 @@ int main(int argc, char **argv)
 		timestamp += solve_time;
 
 		cum_diffs.emplace_back(diff);
-		timestamps.emplace_back(timestamp);
+		if(i%3 != 0)
+			timestamps.emplace_back(timestamp);
+		else
+			timestamps.emplace_back(epee::misc_utils::median(timestamps));
 
 		cum_diffs.erase(cum_diffs.begin());
 		timestamps.erase(timestamps.begin());
