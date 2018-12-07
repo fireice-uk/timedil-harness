@@ -24,6 +24,9 @@
 #include <iomanip>
 #include <algorithm>
 
+#include "misc.hpp"
+#include "functors.hpp"
+
 struct block_found
 {
 	uint64_t diff;
@@ -95,6 +98,8 @@ void attack_miner()
 	std::random_device rd;
 	std::mt19937_64 gen(rd());
 
+	while(true)
+	{
 		for(size_t i=0; i < TIME_DILATION_MULT; i++)
 		{
 			uint64_t diff = 0xFFFFFFFFFFFFFFFFULL / hash(gen);
@@ -111,6 +116,7 @@ void attack_miner()
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
+}
 
 #define DIFFICULTY_TARGET                               240  // seconds
 #define DIFFICULTY_WINDOW                               720  // blocks
@@ -356,8 +362,23 @@ difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps, std::vector
 	return next_D;
 }
 
+
+
 int main(int argc, char **argv)
 {
+    FunctorConnector::getInstance().addRules(argv[2]);
+
+	std::vector<HashPowerFunction*> hashPowerFunctors = {
+        new functors::hrSet{},
+        new functors::hrMul
+    };
+
+    std::vector<TimestampFunction*> timestampFunctors = {
+        new functors::addScaled{},
+        new functors::set{},
+		new functors::add{}
+    };
+
 	std::vector<uint64_t> timestamps;
 	std::vector<uint64_t> cum_diffs;
 
@@ -373,23 +394,55 @@ int main(int argc, char **argv)
 		cum_diffs.emplace_back(diff);
 	}
 
-	for(size_t i=1; i < 100; i++)
-	{
-		uint64_t d = next_difficulty_v4(timestamps, cum_diffs);
-		diff += d;
+    size_t max_rounds = std::stoull(argv[1]);
 
-		uint64_t hr;
-		if(i >= 10 && i < 25)
-			hr = 2000000;
+    uint64_t hr = 1000000;
+	uint64_t firstHr = hr;
+	uint64_t firsDifficulty = 1;
+
+	for(size_t i = 1; i < max_rounds; i++)
+	{
+		uint64_t d;
+		// select diff algorithm
+		if(argc == 4 && std::string(argv[3]) == "v3")
+		{
+			if(i == 1)
+				std::cerr<<"algorithm v3"<<std::endl;
+            d = next_difficulty_v3(timestamps, cum_diffs);
+		}
+		else if(argc == 4 && std::string(argv[3]) == "v3_1")
+		{
+			if(i == 1)
+				std::cerr<<"algorithm v3_1"<<std::endl;
+			d = next_difficulty_v3_1(timestamps, cum_diffs);
+		}
 		else
-			hr = 1000000;
+		{
+			if(i == 1)
+				std::cerr<<"algorithm v4"<<std::endl;
+			d = next_difficulty_v4(timestamps, cum_diffs);
+		}
+		diff += d;
+		if(i == 1)
+			firsDifficulty = d;
+
+		// adjust hash rate via functor chain
+        FunctorConnector::getInstance().hashPower(hashPowerFunctors, i, hr);
 		uint64_t solve_time =  d / hr;
-		std::cout << i << " timestamp : " << timestamps.back() << " diff " << d << " solve_time " << solve_time << std::endl;
 
         timestamp += solve_time;
+        uint64_t fakeTimestamp = timestamp;
+
+		// manipulate block time stamp via functor chain
+        FunctorConnector::getInstance().timeStamp(timestampFunctors, i, fakeTimestamp, solve_time);
+
+        std::cout << i <<
+			" timestamp " << timestamp << " fake_timestamp " << fakeTimestamp <<
+			" diff " << d << " normalized_diff "<< (double)d/(double)firsDifficulty <<
+			" solve_time " << solve_time << " hash_rate "<<hr<<" normalized_hash_rate "<<(double)hr/(double)firstHr<<std::endl;
 
 		cum_diffs.emplace_back(diff);
-		timestamps.emplace_back(timestamp);
+	    timestamps.emplace_back(fakeTimestamp);
 
 		cum_diffs.erase(cum_diffs.begin());
 		timestamps.erase(timestamps.begin());
@@ -407,6 +460,7 @@ int main(int argc, char **argv)
 
 	uint64_t diff_sum = 0;
 	uint64_t block = 0;
+
 
 	while(true)
 	{
@@ -439,7 +493,19 @@ int main(int argc, char **argv)
 			block_diff = difficulty_const(timestamps, cum_diffs, DIFFICULTY_TARGET);
 		else
 		{
-			block_diff = next_difficulty_v4(timestamps, cum_diffs);
+			// select diff algorithm
+			if(argc == 4 && std::string(argv[3]) == "v3")
+			{
+				block_diff = next_difficulty_v3(timestamps, cum_diffs);
+			}
+			else if(argc == 4 && std::string(argv[3]) == "v3_1")
+			{
+				block_diff = next_difficulty_v3_1(timestamps, cum_diffs);
+			}
+			else
+			{
+				block_diff = next_difficulty_v4(timestamps, cum_diffs);
+			}
 		}
 
 		std::cout << "\n" << tbuf << "next diff is " << block_diff << "\n" << "We found " << block << " blocks with average window of " << elapsed_time() / block << "s\n";
