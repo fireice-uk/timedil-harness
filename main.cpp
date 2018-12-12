@@ -362,7 +362,175 @@ difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps, std::vector
 	return next_D;
 }
 
+difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties)
+{
+        if(timestamps.size() != N + 1 || cumulative_difficulties.size() != N + 1)
+                abort();
 
+		// the newest timestamp is not allwed to be older than the previous
+		uint64_t t_last = std::max(timestamps[N], timestamps[N - 1] - 0 * T);
+		// the newest timestamp can only be 3 target times in the future
+        timestamps[N] = std::min(t_last, timestamps[N - 1] + 6 * T);
+
+		// mask all invalid timestamps
+        std::vector<bool> mask(timestamps.size());
+
+        uint64_t lastValid=timestamps[0];
+	    uint64_t maxValid=timestamps[N];
+        for(uint64_t i = 1; i < N; i++)
+        {
+			/* check for invalid time stamps
+			 *
+			 * invalid is each timestamp which is older than the previous
+			 * or newer than the latest block timestamp
+			 *
+			 * If a timestamp is invalid the current and the last timestamp is masked as invalid
+			 */
+			if(timestamps[i] < lastValid || timestamps[i] > maxValid )
+			{
+				// do not invalidate the first timestamp
+				if(i-1 != 0)
+				{
+					mask[i-1] = true;
+				}
+				// do not invalidate the last timestamp
+				if(i != N)
+				{
+					mask[i] = true;
+				}
+			}
+			else
+				lastValid=timestamps[i];
+        }
+
+
+		// interpolate timestamps of masked times
+        for(uint64_t i = 1; i < N; i++)
+        {
+			if(mask[i])
+			{
+				uint64_t x = i + 1;
+				for(; x < N; ++x)
+				{
+					if(!mask[x])
+					{
+						break;
+					}
+				}
+				timestamps[i] = timestamps[i - 1] + (timestamps[x] - timestamps[i - 1]) / (x - i + 1);
+			}
+        }
+
+        uint64_t L = 0;
+
+        for(uint64_t i = 1; i <= N; i++)
+        {
+			L+= (timestamps[i] - timestamps[i -1]) * i * i;
+        }
+
+        // Let's take CD as a sum of N difficulties. Sum of weights is (n*(n+1)*(2n+1))/6 (SUM)
+        // L is a sigma(timeperiods * weights)
+        // D = CD*T*SUM / NL
+        // D = CD*T*N*(N+1)*(2N+1) / 6NL
+        // D = CD*T*(N+1)*(2N+1) / 6L
+        // TSUM = T*(N+1)*(2N+1) / 6 (const)
+        // D = CD*TSUM / L
+
+        // By a happy accident most time units are a multiple of 6 so we can prepare a TSUM without loosing accuracy
+        constexpr uint64_t TSUM = (T * (N+1) * (2*N+1)) / 6;
+        uint64_t next_D = ((cumulative_difficulties[N] - cumulative_difficulties[0]) * TSUM) / L;
+
+        // Sanity limits
+        uint64_t prev_D = cumulative_difficulties[N] - cumulative_difficulties[N-1];
+    	next_D = std::max((prev_D*67)/100, std::min(next_D, (prev_D*150)/100));
+
+        return next_D;
+}
+
+difficulty_type next_difficulty_v4_interp2(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties)
+{
+        if(timestamps.size() != N + 1 || cumulative_difficulties.size() != N + 1)
+                abort();
+
+		// the newest timestamp is not allwed to be older than the previous
+		uint64_t t_last = std::max(timestamps[N], timestamps[N - 1] - 0 * T);
+		// the newest timestamp can only be 3 target times in the future
+        timestamps[N] = std::min(t_last, timestamps[N - 1] + 2 * T);
+
+		// mask all invalid timestamps
+        std::vector<bool> mask(timestamps.size());
+
+        uint64_t lastValid=timestamps[0];
+	    uint64_t maxValid=timestamps[N];
+        for(uint64_t i = 1; i < N; i++)
+        {
+			/* check for invalid time stamps
+			 *
+			 * invalid is each timestamp which is older than the previous
+			 * or newer than the latest block timestamp
+			 *
+			 * If a timestamp is invalid the current and the last timestamp is masked as invalid
+			 */
+			if(timestamps[i] < lastValid || timestamps[i] > maxValid )
+			{
+				// do not invalidate the first timestamp
+				if(i-1 != 0)
+				{
+					mask[i-1] = true;
+				}
+				// do not invalidate the last timestamp
+				if(i != N)
+				{
+					mask[i] = true;
+				}
+			}
+			else
+				lastValid=timestamps[i];
+        }
+
+
+		// interpolate timestamps of masked times
+        for(uint64_t i = 1; i < N; i++)
+        {
+			if(mask[i])
+			{
+				uint64_t x = i + 1;
+				for(; x < N; ++x)
+				{
+					if(!mask[x])
+					{
+						break;
+					}
+				}
+				timestamps[i] = timestamps[i - 1] + (timestamps[x] - timestamps[i - 1]) / (x - i + 1);
+			}
+        }
+
+        uint64_t L = 0;
+
+        for(uint64_t i = 1; i <= N; i++)
+        {
+			L+= (timestamps[i] - timestamps[i -1]) * i * i;
+        }
+
+        // Let's take CD as a sum of N difficulties. Sum of weights is (n*(n+1)*(2n+1))/6 (SUM)
+        // L is a sigma(timeperiods * weights)
+        // D = CD*T*SUM / NL
+        // D = CD*T*N*(N+1)*(2N+1) / 6NL
+        // D = CD*T*(N+1)*(2N+1) / 6L
+        // TSUM = T*(N+1)*(2N+1) / 6 (const)
+        // D = CD*TSUM / L
+
+        // By a happy accident most time units are a multiple of 6 so we can prepare a TSUM without loosing accuracy
+        constexpr uint64_t TSUM = (T * (N+1) * (2*N+1)) / 6;
+        uint64_t next_D = ((cumulative_difficulties[N] - cumulative_difficulties[0]) * TSUM) / L;
+
+        // Sanity limits
+        uint64_t prev_D = cumulative_difficulties[N] - cumulative_difficulties[N-1];
+    	next_D = std::max((prev_D*80)/100, std::min(next_D, (prev_D*120)/100));
+
+        return next_D;
+}
 
 int main(int argc, char **argv)
 {
@@ -415,6 +583,18 @@ int main(int argc, char **argv)
 			if(i == 1)
 				std::cerr<<"algorithm v3_1"<<std::endl;
 			d = next_difficulty_v3_1(timestamps, cum_diffs);
+		}
+		else if(argc == 4 && std::string(argv[3]) == "v4-interp6")
+		{
+			if(i == 1)
+				std::cerr<<"algorithm v4-interp6"<<std::endl;
+			d = next_difficulty_v4_interp6(timestamps, cum_diffs);
+		}
+		else if(argc == 4 && std::string(argv[3]) == "v4-interp2")
+		{
+			if(i == 1)
+				std::cerr<<"algorithm v4-interp2"<<std::endl;
+			d = next_difficulty_v4_interp2(timestamps, cum_diffs);
 		}
 		else
 		{
