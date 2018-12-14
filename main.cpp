@@ -23,6 +23,7 @@
 #include <random>
 #include <iomanip>
 #include <algorithm>
+#include <assert.h>
 
 #include "misc.hpp"
 #include "functors.hpp"
@@ -367,10 +368,13 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
         if(timestamps.size() != N + 1 || cumulative_difficulties.size() != N + 1)
                 abort();
 
+		// highest timestamp must higher than the lowest
+		timestamps[N] = std::max(timestamps[N], timestamps[0]+1);
 		// the newest timestamp is not allwed to be older than the previous
-		uint64_t t_last = std::max(timestamps[N], timestamps[N - 1] - 0 * T);
-		// the newest timestamp can only be 3 target times in the future
-        timestamps[N] = std::min(t_last, timestamps[N - 1] + 6 * T);
+		uint64_t t_last = std::max(timestamps[N], timestamps[N - 1]);
+		// the newest timestamp can only be 5 target times in the future
+        timestamps[N] = std::min(t_last, timestamps[N - 1] + 5*T);
+
 
 		// mask all invalid timestamps
         std::vector<bool> mask(timestamps.size());
@@ -422,10 +426,10 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
         }
 
         uint64_t L = 0;
-
         for(uint64_t i = 1; i <= N; i++)
         {
-			L+= (timestamps[i] - timestamps[i -1]) * i * i;
+			assert(timestamps[i] > timestamps[i-1]);
+			L+= std::min(timestamps[i] - timestamps[i-1], 5*T) * i * i;
         }
 
         // Let's take CD as a sum of N difficulties. Sum of weights is (n*(n+1)*(2n+1))/6 (SUM)
@@ -502,6 +506,7 @@ difficulty_type next_difficulty_v4_interp2(std::vector<uint64_t> timestamps, std
 						break;
 					}
 				}
+				std::cerr<< "Interp" << timestamps[i] << " to " <<timestamps[i - 1] + (timestamps[x] - timestamps[i - 1]) / (x - i + 1) << std::endl;
 				timestamps[i] = timestamps[i - 1] + (timestamps[x] - timestamps[i - 1]) / (x - i + 1);
 			}
         }
