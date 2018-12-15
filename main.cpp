@@ -385,12 +385,12 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
         {
 			/* check for invalid time stamps
 			 *
-			 * invalid is each timestamp which is older than the previous
-			 * or newer than the latest block timestamp
+			 * invalid is each timestamp which is older or equal than the previous
+			 * or newer or equal than the latest block timestamp
 			 *
 			 * If a timestamp is invalid the current and the last timestamp is masked as invalid
 			 */
-			if(timestamps[i] < lastValid || timestamps[i] > maxValid )
+			if(timestamps[i] <= lastValid || timestamps[i] >= maxValid )
 			{
 				// do not invalidate the first timestamp
 				if(i-1 != 0)
