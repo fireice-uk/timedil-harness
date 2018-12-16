@@ -363,6 +363,18 @@ difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps, std::vector
 	return next_D;
 }
 
+//Find non-zero timestamp with index smaller than i
+inline uint64_t findLastValid(const std::vector<uint64_t>& timestamps, size_t i)
+{
+	while(--i > 1)
+	{
+		if(timestamps[i] != 0)
+			return timestamps[i];
+	}
+
+	return timestamps[0];
+}
+
 difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std::vector<difficulty_type> cumulative_difficulties)
 {
 	if(timestamps.size() != N + 1 || cumulative_difficulties.size() != N + 1)
@@ -375,7 +387,6 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
 	// the newest timestamp can only be 5 target times in the future
 	timestamps[N] = std::min(t_last, timestamps[N - 1] + 5 * T);
 
-	uint64_t lastValid = timestamps[0];
 	uint64_t maxValid = timestamps[N];
 	for(size_t i = 1; i < N; i++)
 	{
@@ -383,19 +394,12 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
 		 * Mask timestamp if it is smaller or equal to last valid timestamp
 		 * or if it is larger or equal to largest timestamp
 		 */
-		if(timestamps[i] <= lastValid || timestamps[i] >= maxValid)
+		if(timestamps[i] <= findLastValid(timestamps, i) || timestamps[i] >= maxValid)
+		{
+			if(i != 0)
+				timestamps[i-1] = 0;
 			timestamps[i] = 0;
-		else
-			lastValid = timestamps[i];
-	}
-
-	for(size_t i = 2; i < N; i++)
-	{
-		/* 
-		 * Mask timestamp if the next timestamp is masked
-		 */
-		if(timestamps[i] == 0)
-			timestamps[i-1] = 0;
+		}
 	}
 
 	// Now replace zeros with number of masked timestamps before this one (inclusive)
