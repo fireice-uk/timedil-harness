@@ -377,45 +377,48 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
 
 	uint64_t lastValid = timestamps[0];
 	uint64_t maxValid = timestamps[N];
-	for(uint64_t i = 1; i < N; i++)
+	for(size_t i = 1; i < N; i++)
 	{
-		/* check for invalid time stamps
-			 *
-			 * invalid is each timestamp which is older or equal than the previous
-			 * or newer or equal than the latest block timestamp
-			 *
-			 * If a timestamp is invalid the current and the last timestamp is masked as invalid
-			 */
+		/* 
+		 * Mask timestamp if it is smaller or equal to last valid timestamp
+		 * or if it is larger or equal to largest timestamp
+		 */
 		if(timestamps[i] <= lastValid || timestamps[i] >= maxValid)
-		{
-			// do not invalidate the first timestamp
-			if(i - 1 != 0)
-				timestamps[i - 1] = 0;
-
-			// do not invalidate the last timestamp
-			if(i != N)
-				timestamps[i] = 0;
-		}
+			timestamps[i] = 0;
 		else
-		{
 			lastValid = timestamps[i];
-		}
+	}
+
+	for(size_t i = 2; i < N; i++)
+	{
+		/* 
+		 * Mask timestamp if the next timestamp is masked
+		 */
+		if(timestamps[i] == 0)
+			timestamps[i-1] = 0;
+	}
+
+	// Now replace zeros with number of masked timestamps before this one (inclusive)
+	uint64_t mctr = 0;
+	for(size_t i = 1; i < N; i++)
+	{
+		if(timestamps[i] == 0)
+			timestamps[i] = ++mctr;
+		else
+			mctr = 0;
 	}
 
 	// interpolate timestamps of masked times
-	for(uint64_t i = 1; i < N; i++)
+	for(uint64_t i = N-1; i > 0; i--)
 	{
-		if(timestamps[i] == 0)
+		if(timestamps[i] <= N)
 		{
-			uint64_t x = i + 1;
-			for(; x < N; ++x)
-			{
-				if(timestamps[x] != 0)
-				{
-					break;
-				}
-			}
-			timestamps[i] = timestamps[i - 1] + (timestamps[x] - timestamps[i - 1]) / (x - i + 1);
+			// denominator -- NOT THE SAME AS [i+1]
+			uint64_t den = timestamps[i] + 1; 
+			// numerator
+			uint64_t num = timestamps[i];
+			uint64_t delta = timestamps[i+1] - timestamps[i-num];
+			timestamps[i] = timestamps[i-num] + (delta * num) / den;
 		}
 	}
 
