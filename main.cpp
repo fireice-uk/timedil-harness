@@ -366,7 +366,7 @@ difficulty_type next_difficulty_v3(std::vector<uint64_t> timestamps, std::vector
 //Find non-zero timestamp with index smaller than i
 inline uint64_t findLastValid(const std::vector<uint64_t>& timestamps, size_t i)
 {
-	while(--i > 1)
+	while(--i >= 1)
 	{
 		if(timestamps[i] != 0)
 			return timestamps[i];
@@ -396,7 +396,7 @@ difficulty_type next_difficulty_v4_interp6(std::vector<uint64_t> timestamps, std
 		 */
 		if(timestamps[i] <= findLastValid(timestamps, i) || timestamps[i] >= maxValid)
 		{
-			if(i != 0)
+			if(i != 1)
 				timestamps[i-1] = 0;
 			timestamps[i] = 0;
 		}
